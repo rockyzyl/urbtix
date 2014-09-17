@@ -1,131 +1,140 @@
-# encoding: utf8
+# coding: utf-8
 import json
 import configparser
 import html.parser
 import urllib, urllib.request, urllib.parse
+import random
 
 # 读取URL获得验证码的路径HTML解析类
 class LoginRandCodeParser(html.parser.HTMLParser):
     def __init__(self):
-        self.randCodeUrl = ""
-        self.rand = ''
+        self.captchaurl = ""
         html.parser.HTMLParser.__init__(self)
 
     def handle_starttag(self, tag, attrs):
-        if tag == 'img' and ('id', 'img_rand_code') in attrs:
+        if tag == 'img' and ('id', 'captchaImage') in attrs:
             tag_attrs = dict(attrs)
             if 'src' in tag_attrs and tag_attrs['src']:
                 # 登录验证码的相对路径
+                #/internet/557/captchaImage.jpeg
                 relative_path = tag_attrs['src']
+                terms = str(relative_path).split('/')
+                terms[2] = random.randint(40,500)
+                relative_path = '/' + terms[1] + '/' + str(terms[2]) + '/' + terms[3]
                 # 完整路径
-                self.randCodeUrl = "https://kyfw.12306.cn" + relative_path
-                img_code_params = urllib.parse.parse_qs(relative_path)
-                if 'rand' in img_code_params:
-                    # 登录验证码的验证令牌
-                    self.rand = img_code_params['rand'][0] if img_code_params['rand'] else ''
+                self.captchaurl = "https://ticket.urbtix.hk" + relative_path
+
 
 # 解析登录后返回的HTML, 获取用户帐户信息
 # 用于判断用户是否成功登录
 class InfoCenterParser(html.parser.HTMLParser):
     def __init__(self):
-        self.account_name = ""
-        self.user_info_link = False
-        self.flag = False
+        self.session_time_left = ""
+        self.is_session_time_left = False
+        self.session_time = False
         html.parser.HTMLParser.__init__(self)
 
     def handle_starttag(self, tag, attrs):
-        if tag == 'a' and ('id', 'login_user') in attrs:
-            self.user_info_link = True
-        if tag == 'span' and self.user_info_link:
-            self.flag = True
-
+        if tag == 'div' and ('id', 'session-time-left') in attrs:
+            self.session_time = True
+            self.is_session_time_left = True
     def handle_data(self, data):
-        if self.user_info_link and self.flag:
-            self.account_name = data
+        if self.session_time and self.is_session_time_left:
+            self.session_time_left = data
 
     def handle_endtag(self, tag):
-        if tag == 'a':
-            self.user_info_link = False
-        if tag == 'span':
+        if tag == 'div':
+            self.session_time = False
+
+
+class LogoutParser(html.parser.HTMLParser):
+    def __init__(self):
+        self.is_logout = False
+        self.flag = False
+        self.message = ''
+        html.parser.HTMLParser.__init__(self)
+    
+    def handle_starttag(self, tag, attrs):
+        if tag == 'div' and ('id', 'logout-page-intro') in attrs:
+            self.is_logout = True
+            self.flag = True
+    
+    def handle_data(self, data):
+        # print(str(data).strip())
+        if self.flag and self.is_logout:
+            self.message = data
+
+    def handle_endtag(self, tag):
+        if tag == 'div':
             self.flag = False
 
+
 # 获取验证码图片
-def getRandImageUrlAndCodeRand(ht):
-    result = {'url': '', 'rand': ''}
+def getRandImageUrl(ht):
     # 得到登录页面HTML内容
-    loginHtml = ht.get(url="https://kyfw.12306.cn/otn/login/init")
-    # 解析登录页面内容，获取图片验证码的URL地址，以及验证码令牌rand
+    # 必须先连到www.urbtix.hk,获取cookie，不能直接连ticket.urbtix.hk
+    # loginHtml = ht.get(url="http://www.urbtix.hk/internet/en_US")
+    loginHtml = ht.get(url="http://www.urbtix.hk/internet/zh_CN")
+    loginHtml = ht.get(url="http://ticket.urbtix.hk/internet/login/member")
+    loginHtml = ht.get(url="https://ticket.urbtix.hk/internet/login/member")
+    # 解析登录页面内容，获取图片验证码的URL地址
     loginParer = LoginRandCodeParser()
     loginParer.feed(loginHtml)
-    randUrl = loginParer.randCodeUrl
-    rand = loginParer.rand
-    if randUrl and rand:
-        result['url'] = randUrl
-        result['rand'] = rand
-        return result
+    captchaurl = loginParer.captchaurl
+    if captchaurl:
+        return captchaurl
     else:
         f = open("login.html", 'w', encoding='utf-8')
         f.write(loginHtml)
         f.close()
         print("验证码URL获取失败, 详情查看返回的login.html页面")
-    return result
+    return None
 
 
-def login(ht, username, password, randCode, rand, check_rand_status='Y'):
-    # 判断用户是否进行验证码的检查操作，如果check_rand_status为N则直接跳过进行登录
-    if check_rand_status == 'Y':
-        # 判断用户输入的验证码是否正确
-        post_datas = {
-            'randCode': randCode, # 输入验证码
-            'rand': rand            # 验证令牌
-        }
-        # 检证输入验证码的合法性
-        # rocky: can check several times to verify the correctness of randCode before submit
-        json_str = ht.post(url="https://kyfw.12306.cn/otn/passcodeNew/checkRandCodeAnsyn", params=post_datas)
-        json_data = json.loads(json_str)
+def login(ht, username, password, captcha):
+
+    post_data = {
+        "j_username": username,
+        "j_password": password,
+        "captcha": captcha
+    }
+    # 用户登录，获取登录返回的HTML
+    content = ht.post(url="https://ticket.urbtix.hk/internet/j_spring_security_check", params=post_data)
+    content = ht.get(url='https://ticket.urbtix.hk/internet/')
+    f = open("login_result.html", 'w', encoding='utf-8', errors='ignore')
+    f.write(content)
+    f.close()
+    infocenterParser = InfoCenterParser()
+    infocenterParser.feed(content)
+    is_session_time_left = infocenterParser.is_session_time_left
+    session_time_left = infocenterParser.session_time_left
+    if is_session_time_left:
+        print('登陆成功')
+        print('session_time_left:', session_time_left)
+        return True
     else:
-        json_data = {'data': 'Y'}
-
-    if (json_data["data"] == 'Y'):
-        post_data = {
-            "loginUserDTO.user_name": username,
-            "userDTO.password": password,
-            "randCode": randCode
-        }
-        # 请求 https://kyfw.12306.cn/otn/login/loginAysnSuggest
-        # 用于判断当前网络环境是否可以登录,得到JSON数据：
-        # {"validateMessagesShowId":"_validatorMessage","status":true,"httpstatus":200,"data":"Y","messages":[],"validateMessages":{}}
-        # rocky: can only check once for each randCode pic
-        json_str = ht.post(url="https://kyfw.12306.cn/otn/login/loginAysnSuggest", params=post_data)
-        json_data = json.loads(json_str)
-        # loginRand = 0
-        # 检查用户是否可以登录
-        if ("data" in json_data and json_data["data"] and "loginCheck" in json_data["data"] and json_data["data"][
-            "loginCheck"] == 'Y'):
-            # 用户登录，获取登录返回的HTML
-            content = ht.post(url="https://kyfw.12306.cn/otn/login/userLogin", params=post_data)
-            # 解析登录返回的HTML判断用户是否成功登录
-            infocenterParser = InfoCenterParser()
-            infocenterParser.feed(content)
-            user_info = infocenterParser.account_name
-            # print(user_info.encode('utf-8'))
-            if user_info:
-                print('您好, %s' % user_info)
-                return True
-            else:
-                f = open("login_result.html", 'w', encoding='utf-8', errors='ignore')
-                f.write(content)
-                f.close()
-                print("登录失败, 详情查看登录返回的login_result.html页面")
-        else:
-            messages = json_data.get('messages', '') if type(json_data) == dict else json_str
-            if not messages: messages = '当前网络繁忙不可登录访问!'
-            print(messages)
-    else:
-        print(json_str)
-        print('输入的验证码有误.')
+        f = open("login_result.html", 'w', encoding='utf-8', errors='ignore')
+        f.write(content)
+        f.close()
+        print("登录失败, 详情查看登录返回的login_result.html页面")
 
     return False
+
+
+def logout(ht):
+    result = ht.get(url='https://ticket.urbtix.hk/internet/shoppingCart/checkEmpty')
+    result = ht.post(url='https://ticket.urbtix.hk/internet/json/event/recentlyViewed/evt.json',params={})
+    result = ht.get(url='https://ticket.urbtix.hk/internet/logout')
+    f = open("logout_result.html", 'w', encoding='utf-8', errors='ignore')
+    f.write(result)
+    f.close()
+    logoutP = LogoutParser()
+    logoutP.feed(result)
+    if logoutP.is_logout:
+        message = logoutP.message
+        print('logout message:',message)
+    return logoutP.is_logout
+
 
 # 读取config.ini文件获取用户设置的帐号信息
 def getUserInfo():

@@ -48,7 +48,7 @@ class LoginFrame:
         self.loginButton.pack(padx=5, pady=5)
 
     def refreshImg(self):
-        url = self.url + "&" + str(random.random())
+        url = self.url
         while True:
             try:
                 image_bytes = urlopen(url).read()
